@@ -1,0 +1,286 @@
+import express from 'express'
+import passport from 'passport'
+import {
+  loginUser,
+  registerUser,
+  getProfile,
+  logoutUser,
+  updateProfile,
+} from '../controller/authController.js'
+import { admin, protect } from '../middleware/authMiddleware.js'
+import generateToken from '../utils/generateToken.js'
+
+const router = express.Router()
+
+// Google OAuth Routes
+router.get(
+  '/auth/google',
+  passport.authenticate('google', {
+    scope: ['profile', 'email'],
+  })
+)
+
+router.get(
+  '/auth/google/callback',
+  passport.authenticate('google', {
+    failureRedirect: '/login',
+   
+  }),
+  (req, res) => {
+    // Generate the token for the logged-in user
+    const token = generateToken(req.user._id, res) // Pass the response object
+
+    // Optionally log the token or send it in the response body (for API use)
+    // console.log(token); // Token could also be sent in response if not using cookies
+
+    // Redirect to profile page or send the response to the client
+    res.redirect('http://localhost:3000/profile')
+  }
+)
+// Register route (email and password)
+router.post('/register', registerUser)
+
+// Login route (email and password)
+router.post('/login', loginUser)
+
+// Protect profile and update routes for regular login (using `protect` middleware)
+router.route('/profile').get(protect, getProfile) // Protected for regular users
+router.route('/profile').put(protect, updateProfile) // Protected for regular users
+
+// Logout route
+router.post('/logout', logoutUser)
+
+export default router
+
+
+
+import jwt from 'jsonwebtoken'
+
+/**
+ * Generates a JWT token and sets it as a cookie in the response.
+ * @param {string} userId - The user ID (or other unique identifier).
+ * @param {Object} res - The Express response object.
+ * @returns {string} - The generated JWT token.
+ */
+ const generateToken = (userId, res = null) => {
+  // Generate JWT token with a payload that includes the user ID
+  const token = jwt.sign(
+    { userId },
+    process.env.AUTH_DEV, // Secret key for signing the token
+    { expiresIn: '30d' } // Set the token to expire in 30 days
+  )
+
+  if (res) {
+    // If the response object is provided, set the JWT token as an HTTP-only cookie
+    res.cookie('jwt', token, {
+      httpOnly: true, // Makes the cookie inaccessible to JavaScript
+      secure: process.env.NODE_ENV === 'production', // Only send cookie over HTTPS in production
+      sameSite: 'strict', // Helps prevent CSRF attacks
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in milliseconds
+    })
+  }
+
+  return token // Return the token (if needed, for use in headers or other places)
+}
+export default generateToken
+
+
+
+
+
+import jwt from 'jsonwebtoken'
+
+const generateToken = (userId, res = null) => {
+  const token = jwt.sign({ userId }, process.env.AUTH_DEV, {
+    expiresIn: '30d',
+  })
+  if (res) {
+    res.cookie('jwt', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    })
+  }
+  return token
+}
+
+export default generateToken
+
+
+
+import React, { useEffect, useState } from 'react'
+import { useDispatch, useSelector } from 'react-redux'
+import { useNavigate } from 'react-router-dom'
+import { toast } from 'react-toastify'
+import {
+  useProfileQuery,
+  useUpdateProfileMutation,
+  useLogoutMutation,
+} from '../slices/userApiSlice'
+import { setCredentials, logout } from '../slices/authSlice'
+
+const Profile = () => {
+  const { userInfo } = useSelector((state) => state.auth)
+  const dispatch = useDispatch()
+  const navigate = useNavigate()
+
+  // State for name, email, and password
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+
+  // Fetch profile using the useProfileQuery hook
+  const { data: user, isLoading, isError } = useProfileQuery()
+
+  // Use updateProfileMutation to send updated data to the backend
+  const [updateProfile, { isLoading: isUpdating, error }] =
+    useUpdateProfileMutation()
+
+  // Use the logout mutation
+  const [logoutApiCall] = useLogoutMutation()
+
+  // Handle form submission to update profile
+  const handleUpdate = async (e) => {
+    e.preventDefault() // Prevent default form submission
+
+    try {
+      // Call updateProfile mutation with the updated name, email, and password
+      await updateProfile({ name, email, password }).unwrap()
+
+      // Optionally, update the Redux store if successful
+      dispatch(setCredentials({ ...user, name, email })) // Update name and email in Redux store
+
+      toast.success('Profile updated successfully!')
+    } catch (err) {
+      toast.error(error?.message || 'Failed to update profile')
+    }
+  }
+
+  // Handle logout
+  const handleLogout = async () => {
+    try {
+      await logoutApiCall().unwrap() // Call logout API
+      dispatch(logout()) // Dispatch the logout action to reset user data in Redux
+      setName('') // Clear the local state
+      setEmail('') // Clear the local state
+      setPassword('') // Clear the local state
+      navigate('/login') // Redirect to login page
+      toast.success('Logged out successfully!')
+    } catch (error) {
+      toast.error('Logout failed!')
+    }
+  }
+
+  useEffect(() => {
+    if (userInfo) {
+      setName(userInfo.name || '') // Set the initial name from Redux store or user data
+      setEmail(userInfo.email || '') // Set the initial email from Redux store or user data
+    }
+  }, [userInfo])
+
+  useEffect(() => {
+    if (!userInfo) {
+      setName('') // Reset name when there's no user info
+      setEmail('') // Reset email when there's no user info
+    }
+  }, [userInfo])
+
+  if (isLoading) return <p>Loading...</p>
+  if (isError || !user) return <p>Error fetching profile</p>
+
+  return (
+    <div style={styles.container}>
+      <h2>Welcome, {user.name || user.email}</h2>
+
+      <form onSubmit={handleUpdate} style={styles.form}>
+        <label htmlFor='name'>Update Name:</label>
+        <input
+          type='text'
+          id='name'
+          name='name'
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder='Enter new name'
+          style={styles.input}
+        />
+
+        <label htmlFor='email'>Update Email:</label>
+        <input
+          type='email'
+          id='email'
+          name='email'
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder='Enter new email'
+          style={styles.input}
+        />
+
+        <label htmlFor='password'>Update Password:</label>
+        <input
+          type='password'
+          id='password'
+          name='password'
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder='Enter new password'
+          style={styles.input}
+        />
+
+        <button type='submit' style={styles.button} disabled={isUpdating}>
+          {isUpdating ? 'Updating...' : 'Update Profile'}
+        </button>
+      </form>
+
+      <button onClick={handleLogout} style={styles.logoutButton}>
+        Logout
+      </button>
+    </div>
+  )
+}
+
+const styles = {
+  container: {
+    maxWidth: '600px',
+    margin: '0 auto',
+    padding: '20px',
+    textAlign: 'center',
+    backgroundColor: '#f9f9f9',
+    borderRadius: '8px',
+    boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+  },
+  form: {
+    textAlign: 'left',
+    marginTop: '20px',
+    fontSize: '16px',
+  },
+  input: {
+    padding: '8px',
+    margin: '10px 0',
+    width: '100%',
+    borderRadius: '4px',
+    border: '1px solid #ccc',
+  },
+  button: {
+    padding: '10px 20px',
+    fontSize: '16px',
+    backgroundColor: '#333',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    marginTop: '20px',
+  },
+  logoutButton: {
+    padding: '10px 20px',
+    fontSize: '16px',
+    backgroundColor: '#e74c3c',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    marginTop: '20px',
+  },
+}
+
+export default Profile
